@@ -37,7 +37,7 @@ train_loader:
   dataset:
     local: *data_local
     remote: *data_remote
-    split: train
+    split: train_small
     shuffle: true
     tokenizer_name: *tokenizer_name
     max_seq_len: *max_seq_len
@@ -97,7 +97,7 @@ fsdp_config:
   sharding_strategy: FULL_SHARD
   min_params: 2e8
   mixed_precision: DEFAULT
-  activation_checkpointing: true
+  activation_checkpointing: false 
   activation_cpu_offload: false
   verbose: true
 

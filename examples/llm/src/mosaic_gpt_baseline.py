@@ -18,10 +18,6 @@ from composer.metrics.nlp import LanguageCrossEntropy, Perplexity
 from composer.models.base import ComposerModel
 from omegaconf import DictConfig
 
-from performance.algorithms.fused_dense_gelu_dense.fused_dgd_layer import DenseResGeluDense
-from performance.algorithms.fused_dropout_add_layernorm.dropout_ln_add import DropoutAddLayerNorm
-
-from src.losses.cross_entropy import CrossEntropyLoss
 
 class TorchCausalAttention(nn.Module):
 
@@ -203,14 +199,20 @@ def alibi_bias(n_heads,
 
 
 class GPTMLP(nn.Module):
+
     def __init__(self, cfg: DictConfig, device: Optional[str] = None):
         super().__init__()
-        self.dense_gelu_dense = DenseResGeluDense(cfg.d_model, cfg.mlp_ratio * cfg.d_model, cfg.d_model, device=device)
-        self.dense_gelu_dense.fc2._is_residual = True
+        self.mlp_up = nn.Linear(cfg.d_model,
+                                cfg.mlp_ratio * cfg.d_model,
+                                device=device)
+        self.mlp_act = nn.GELU(approximate='none')
+        self.mlp_down = nn.Linear(cfg.mlp_ratio * cfg.d_model,
+                                  cfg.d_model,
+                                  device=device)
+        self.mlp_down._is_residual = True  # type: ignore
 
     def forward(self, x):
-        out, _ = self.dense_gelu_dense(x)
-        return out
+        return self.mlp_down(self.mlp_act(self.mlp_up(x)))
 
 
 class GPTBlock(nn.Module):
@@ -228,7 +230,7 @@ class GPTBlock(nn.Module):
         self.mlp = GPTMLP(cfg, device=device)
         self.resid_attn_dropout = nn.Dropout(cfg.resid_pdrop)
         self.resid_mlp_dropout = nn.Dropout(cfg.resid_pdrop)
-        
+
     def forward(
         self,
         x: torch.Tensor,
@@ -242,48 +244,6 @@ class GPTBlock(nn.Module):
         n = self.mlp(m)
         x = x + self.resid_mlp_dropout(n)
         return x
-
-
-# ====================================
-# New GPT Block, allowing for Dropout 
-# + Add + LayerNorm optimizations
-# ====================================
-class NewGPTBlock(nn.Module):
-
-    def __init__(self,
-                 cfg: DictConfig,
-                 causal_attn_cls,
-                 device: Optional[str] = None):
-        super().__init__()
-        if cfg.get('alibi', False):
-            assert cfg.attn_impl == 'triton' or cfg.attn_impl == 'torch', 'Only triton kernel or torch supports alibi'
-        self.causal_attn = causal_attn_cls(cfg, device)
-        self.mlp = GPTMLP(cfg, device=device)
-        # DropoutAddLayerNorm layers
-        self.daln_1 = DropoutAddLayerNorm(cfg.d_model, cfg.resid_pdrop, device=device)
-        self.daln_2 = DropoutAddLayerNorm(cfg.d_model, cfg.resid_pdrop, device=device)
-
-    def forward(
-        self,
-        x: torch.Tensor,
-        key_padding_mask: Optional[torch.ByteTensor] = None,
-        attn_mask: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
-        a, _ = self.causal_attn(x, key_padding_mask, attn_mask)
-        b = self.daln_1(a, x)
-        # DropoutAddLayerNorm is equivalent to:    
-        # y = x + self.resid_attn_dropout(a)
-        # b = self.ln_1(y)
-
-        m = self.mlp(b) 
-        n = self.daln_2(m, b)
-        # DropoutAddLayerNorm is equivalent to:
-        # y2 = b + self.resid_mlp_dropout(m)
-        # n = self.ln_2(y2)
-        return n
-# ====================================
-# End New GPT Block
-# ====================================
 
 
 class MosaicGPT(nn.Module):
@@ -344,7 +304,6 @@ class MosaicGPT(nn.Module):
                                  torch.empty(mask_shape, device=cfg.device))
         else:
             self.attn_mask = None
-
 
     def _attn_mask(self, batch_size=None, seq_len=None, key_padding_mask=None):
         if not self._attn_mask_initialized:
@@ -453,11 +412,6 @@ class MosaicGPT(nn.Module):
             torch.nn.init.zeros_(module.bias)
             torch.nn.init.ones_(module.weight)
 
-        # DenseResGeluDense
-        if isinstance(module, DenseResGeluDense):
-            self.param_init_fn(module.fc1)
-            self.param_init_fn(module.fc2)
-
         # torch's MultiheadAttention
         if isinstance(module, nn.MultiheadAttention):
             if module._qkv_same_embed_dim:
@@ -512,8 +466,6 @@ class ComposerMosaicGPT(ComposerModel):
             'LanguageCrossEntropy': LanguageCrossEntropy(cfg.vocab_size),
             'Perplexity': Perplexity(),
         }
-        self.loss_fn = CrossEntropyLoss(inplace_backward=True)
-
 
     def get_targets(self, batch):
         targets = torch.roll(batch['labels'], shifts=-1)
@@ -529,9 +481,9 @@ class ComposerMosaicGPT(ComposerModel):
 
     def loss(self, outputs, batch):
         targets = self.get_targets(batch)
-        
-        return self.loss_fn(outputs.view(-1, outputs.size(-1)),
-                               targets.view(-1))
+        return F.cross_entropy(outputs.view(-1, outputs.size(-1)),
+                               targets.view(-1),
+                               ignore_index=-100)
 
     def get_metrics(self, is_train=False):
         return self.train_metrics if is_train else self.eval_metrics
@@ -556,3 +508,4 @@ class ComposerMosaicGPT(ComposerModel):
             self.model.cfg.d_model * (self.model.cfg.max_seq_len**2))
         self.__num_fwd_flops = params_flops_per_seq + attn_flops_per_seq
         return self.__num_fwd_flops
+
