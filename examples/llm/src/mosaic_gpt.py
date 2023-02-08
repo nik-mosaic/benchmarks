@@ -214,7 +214,7 @@ class GPTMLP(nn.Module):
         return out
 
 
-class GPTBlock(nn.Module):
+class V1GPTBlock(nn.Module):
 
     def __init__(self,
                  cfg: DictConfig,
@@ -293,7 +293,7 @@ class V2GPTBlock(nn.Module):
 # equivalence to original GPT Block structure
 # ===========================================
 
-class V3GPTBlock(nn.Module):
+class GPTBlock(nn.Module):
 
     def __init__(self,
                  cfg: DictConfig,
@@ -361,8 +361,10 @@ class MosaicGPT(nn.Module):
                                  device=cfg.device)
             })
         self.transformer.update({'emb_drop': nn.Dropout(cfg.emb_pdrop)})
+        
         # Use ln_i only with V3GPT Block
-        # self.transformer.update({'ln_i': nn.LayerNorm(cfg.d_model, device=cfg.device)})
+        self.transformer.update({'ln_i': nn.LayerNorm(cfg.d_model, device=cfg.device)})
+        
         self.transformer.update({
             'blocks':
                 nn.ModuleList([
@@ -460,10 +462,12 @@ class MosaicGPT(nn.Module):
         attn_mask = self._attn_mask(batch_size=B,
                                     seq_len=S,
                                     key_padding_mask=key_padding_mask)
+        
         # Only use with V3GPTBlock Initial LayerNorm
-        # a = self.transformer.ln_i(x)
+        a = self.transformer.ln_i(x)
         
         # GPT Blocks
+        """
         for block in self.transformer.blocks:  # type: ignore
             x = block(
                 x, None if self.cfg.attn_impl == 'triton' else key_padding_mask,
@@ -474,7 +478,7 @@ class MosaicGPT(nn.Module):
             a, x = block(
                 a, x, None if self.cfg.attn_impl == 'triton' else key_padding_mask,
                 attn_mask)
-        """
+        
         x = self.transformer.ln_f(x)  # type: ignore
         # output embedding weight tied to input embedding
         assert isinstance(self.transformer.wte, nn.Module)  # pyright

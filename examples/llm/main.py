@@ -128,9 +128,13 @@ def main(cfg):
     print('Logging config...')
     log_config(cfg)
 
+    print("MODEL:")
+    print(trainer.state.model)
+
+
     print('Starting training...')
     trainer.fit()
-
+    
     print('Done.')
 
 
