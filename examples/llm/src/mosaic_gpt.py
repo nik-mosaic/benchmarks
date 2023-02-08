@@ -17,12 +17,13 @@ import torch.nn.functional as F
 from composer.metrics.nlp import LanguageCrossEntropy, Perplexity
 from composer.models.base import ComposerModel
 from omegaconf import DictConfig
-
-from performance.algorithms.fused_dense_gelu_dense.fused_dgd_layer import DenseResGeluDense
-# from performance.algorithms.fused_dropout_add_layernorm.dropout_ln_add import DropoutAddLayerNorm
-
+from performance.algorithms.fused_dense_gelu_dense.fused_dgd_layer import \
+    DenseResGeluDense
 from src.losses.cross_entropy import CrossEntropyLoss
 from src.ops.layer_norm import dropout_add_layer_norm
+
+# from performance.algorithms.fused_dropout_add_layernorm.dropout_ln_add import DropoutAddLayerNorm
+
 
 class TorchCausalAttention(nn.Module):
 
@@ -204,9 +205,13 @@ def alibi_bias(n_heads,
 
 
 class GPTMLP(nn.Module):
+
     def __init__(self, cfg: DictConfig, device: Optional[str] = None):
         super().__init__()
-        self.dense_gelu_dense = DenseResGeluDense(cfg.d_model, cfg.mlp_ratio * cfg.d_model, cfg.d_model, device=device)
+        self.dense_gelu_dense = DenseResGeluDense(cfg.d_model,
+                                                  cfg.mlp_ratio * cfg.d_model,
+                                                  cfg.d_model,
+                                                  device=device)
         self.dense_gelu_dense.fc2._is_residual = True
 
     def forward(self, x):
@@ -229,7 +234,7 @@ class V1GPTBlock(nn.Module):
         self.mlp = GPTMLP(cfg, device=device)
         self.resid_attn_dropout = nn.Dropout(cfg.resid_pdrop)
         self.resid_mlp_dropout = nn.Dropout(cfg.resid_pdrop)
-        
+
     def forward(
         self,
         x: torch.Tensor,
@@ -246,7 +251,7 @@ class V1GPTBlock(nn.Module):
 
 
 # ====================================
-# New GPT Block, allowing for Dropout 
+# New GPT Block, allowing for Dropout
 # + Add + LayerNorm optimizations
 # ====================================
 class V2GPTBlock(nn.Module):
@@ -261,8 +266,12 @@ class V2GPTBlock(nn.Module):
         self.causal_attn = causal_attn_cls(cfg, device)
         self.mlp = GPTMLP(cfg, device=device)
         # DropoutAddLayerNorm layers
-        self.daln_1 = DropoutAddLayerNorm(cfg.d_model, cfg.resid_pdrop, device=device)
-        self.daln_2 = DropoutAddLayerNorm(cfg.d_model, cfg.resid_pdrop, device=device)
+        self.daln_1 = DropoutAddLayerNorm(cfg.d_model,
+                                          cfg.resid_pdrop,
+                                          device=device)
+        self.daln_2 = DropoutAddLayerNorm(cfg.d_model,
+                                          cfg.resid_pdrop,
+                                          device=device)
 
     def forward(
         self,
@@ -271,27 +280,29 @@ class V2GPTBlock(nn.Module):
         attn_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         a, _ = self.causal_attn(x, key_padding_mask, attn_mask)
-        b = self.daln_1(a, x) 
-        # DropoutAddLayerNorm is equivalent to:    
+        b = self.daln_1(a, x)
+        # DropoutAddLayerNorm is equivalent to:
         # y = x + self.resid_attn_dropout(a)
         # b = self.ln_1(y)
 
-        m = self.mlp(b) 
+        m = self.mlp(b)
         n = self.daln_2(m, b)
         # DropoutAddLayerNorm is equivalent to:
         # y2 = b + self.resid_mlp_dropout(m)
         # n = self.ln_2(y2)
         return n
+
+
 # ====================================
 # End New GPT Block
 # ====================================
-
 
 # ===========================================
 # SECOND VERSION of New GPT Blocks:
 # Shift operations but maintain
 # equivalence to original GPT Block structure
 # ===========================================
+
 
 class GPTBlock(nn.Module):
 
@@ -317,10 +328,27 @@ class GPTBlock(nn.Module):
         attn_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         b, _ = self.causal_attn(a, key_padding_mask, attn_mask)
-        m, x = dropout_add_layer_norm(b, x, self.ln_1.weight, self.ln_1.bias, 0.0, self.ln_2.eps, None, prenorm=True, residual_in_fp32=False)
+        m, x = dropout_add_layer_norm(b,
+                                      x,
+                                      self.ln_1.weight,
+                                      self.ln_1.bias,
+                                      0.0,
+                                      self.ln_2.eps,
+                                      None,
+                                      prenorm=True,
+                                      residual_in_fp32=False)
         n = self.mlp(m)
-        a, x = dropout_add_layer_norm(n, x, self.ln_2.weight, self.ln_2.bias, 0.0, self.ln_2.eps, None, prenorm=True, residual_in_fp32=False)
+        a, x = dropout_add_layer_norm(n,
+                                      x,
+                                      self.ln_2.weight,
+                                      self.ln_2.bias,
+                                      0.0,
+                                      self.ln_2.eps,
+                                      None,
+                                      prenorm=True,
+                                      residual_in_fp32=False)
         return a, x
+
 
 # ========================================
 # End second version of GPT Block
@@ -361,10 +389,11 @@ class MosaicGPT(nn.Module):
                                  device=cfg.device)
             })
         self.transformer.update({'emb_drop': nn.Dropout(cfg.emb_pdrop)})
-        
+
         # Use ln_i only with V3GPT Block
-        self.transformer.update({'ln_i': nn.LayerNorm(cfg.d_model, device=cfg.device)})
-        
+        self.transformer.update(
+            {'ln_i': nn.LayerNorm(cfg.d_model, device=cfg.device)})
+
         self.transformer.update({
             'blocks':
                 nn.ModuleList([
@@ -389,7 +418,6 @@ class MosaicGPT(nn.Module):
                                  torch.empty(mask_shape, device=cfg.device))
         else:
             self.attn_mask = None
-
 
     def _attn_mask(self, batch_size=None, seq_len=None, key_padding_mask=None):
         if not self._attn_mask_initialized:
@@ -462,11 +490,12 @@ class MosaicGPT(nn.Module):
         attn_mask = self._attn_mask(batch_size=B,
                                     seq_len=S,
                                     key_padding_mask=key_padding_mask)
-        
+
         # Only use with V3GPTBlock Initial LayerNorm
         a = self.transformer.ln_i(x)
-        
+
         # GPT Blocks
+
         """
         for block in self.transformer.blocks:  # type: ignore
             x = block(
@@ -476,9 +505,10 @@ class MosaicGPT(nn.Module):
         # Only use with V3GPTBlock
         for block in self.transformer.blocks:  # type: ignore
             a, x = block(
-                a, x, None if self.cfg.attn_impl == 'triton' else key_padding_mask,
+                a, x,
+                None if self.cfg.attn_impl == 'triton' else key_padding_mask,
                 attn_mask)
-        
+
         x = self.transformer.ln_f(x)  # type: ignore
         # output embedding weight tied to input embedding
         assert isinstance(self.transformer.wte, nn.Module)  # pyright
@@ -572,7 +602,6 @@ class ComposerMosaicGPT(ComposerModel):
         }
         self.loss_fn = CrossEntropyLoss(inplace_backward=True)
 
-
     def get_targets(self, batch):
         targets = torch.roll(batch['labels'], shifts=-1)
         targets[:, -1] = -100
@@ -587,9 +616,9 @@ class ComposerMosaicGPT(ComposerModel):
 
     def loss(self, outputs, batch):
         targets = self.get_targets(batch)
-        
+
         return self.loss_fn(outputs.view(-1, outputs.size(-1)),
-                               targets.view(-1))
+                            targets.view(-1))
 
     def get_metrics(self, is_train=False):
         return self.train_metrics if is_train else self.eval_metrics

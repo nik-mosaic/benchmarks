@@ -53,7 +53,7 @@ template<
 struct Kernel_traits_finalize : public Base {
     enum { ROWS_PER_CTA = Base::THREADS_PER_CTA / Base::THREADS_PER_WARP };
     static_assert((int) ROWS_PER_CTA <= (int) Base::THREADS_PER_WARP);
-    // Bytes per global load from the input. 
+    // Bytes per global load from the input.
     enum { BYTES_PER_LDG = BYTES_PER_LDG_ };
     // Number of elements fetched by a global load.
     enum { ELTS_PER_LDG = BYTES_PER_LDG / sizeof(compute_t_) };
@@ -69,7 +69,7 @@ struct Kernel_traits_finalize : public Base {
     enum { SMEM_BYTES_TRANSPOSE = Base::THREADS_PER_CTA * BYTES_PER_LDG };
     // Shared memory size to coalsece the CTA result.
     enum { SMEM_BYTES_OUTPUT = Base::THREADS_PER_WARP * BYTES_PER_LDG };
-    // Shared memory requirement per CTA. 
+    // Shared memory requirement per CTA.
     static constexpr int NUM_FACTORS = Has_colscale ? 3 : 2;
     enum { SMEM_BYTES_PER_CTA = NUM_FACTORS * SMEM_BYTES_TRANSPOSE + NUM_FACTORS * SMEM_BYTES_OUTPUT };
 
@@ -79,7 +79,7 @@ struct Kernel_traits_finalize : public Base {
     // Condition for the whole CTA to participate in syncthreads.
     static_assert(COLS % Base::THREADS_PER_WARP == 0);
     enum { CTAS = COLS / Base::THREADS_PER_WARP };
-}; 
+};
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -91,19 +91,19 @@ template<
     typename output_t_,
     typename compute_t_,
     typename index_t_,
-    uint32_t HIDDEN_SIZE_, 
-    uint32_t CTAS_PER_ROW_, 
-    uint32_t WARPS_M_, 
-    uint32_t WARPS_N_, 
+    uint32_t HIDDEN_SIZE_,
+    uint32_t CTAS_PER_ROW_,
+    uint32_t WARPS_M_,
+    uint32_t WARPS_N_,
     uint32_t BYTES_PER_LDG_ = 16,
     typename Base = Kernel_traits_base<
         HIDDEN_SIZE_,
-        weight_t_, 
+        weight_t_,
         input_t_,
         residual_t_,
-        output_t_, 
-        compute_t_, 
-        index_t_, 
+        output_t_,
+        compute_t_,
+        index_t_,
         WARPS_M_*WARPS_N_*THREADS_PER_WARP
         >
 >
@@ -137,7 +137,7 @@ struct Kernel_traits : public Base {
     static_assert(WARPS_M == 1 || CTAS_PER_ROW == 1);
 
     using reduce_t = typename layer_norm::TypeToVec2<compute_t>::Type;
-    using Reducer = layer_norm::Reducer<reduce_t, CTAS_PER_ROW, WARPS_M, WARPS_N>; 
+    using Reducer = layer_norm::Reducer<reduce_t, CTAS_PER_ROW, WARPS_M, WARPS_N>;
 
     enum { SMEM_BYTES_DGRAD = Reducer::SMEM_BYTES };
     enum { SMEM_BYTES = SMEM_BYTES_DGRAD  + SMEM_BYTES_WGRAD };

@@ -8,7 +8,7 @@
 namespace layer_norm {
 
 template<typename Ktraits, bool Is_dropout, bool Has_colscale, bool Has_subset, bool Is_even_cols>
-__global__ __launch_bounds__(Ktraits::THREADS_PER_CTA) 
+__global__ __launch_bounds__(Ktraits::THREADS_PER_CTA)
 void ln_bwd_kernel(layer_norm::BwdParams params) {
 
     enum { ROWS_PER_CTA = Ktraits::ROWS_PER_CTA };
@@ -379,7 +379,7 @@ void ln_bwd_finalize_kernel(BwdParams params)
             memset(&dgamma_local, 0, sizeof(dgamma_local));
             if (Has_colscale) { memset(&dcolscale_local, 0, sizeof(dcolscale_local)); }
 
-            // Load beta and gamma transposed 
+            // Load beta and gamma transposed
             if(read_row < Kernel_traits::ROWS_PER_CTA){
                 dbeta_local.load_from(smem_beta, read_idx);
                 dgamma_local.load_from(smem_gamma, read_idx);

@@ -97,7 +97,7 @@ fsdp_config:
   sharding_strategy: FULL_SHARD
   min_params: 2e8
   mixed_precision: DEFAULT
-  activation_checkpointing: false 
+  activation_checkpointing: false
   activation_cpu_offload: false
   verbose: true
 

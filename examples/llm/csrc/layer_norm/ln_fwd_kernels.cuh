@@ -17,7 +17,7 @@
 namespace layer_norm {
 
 template<typename Ktraits, bool Is_dropout, bool Has_colscale, bool Has_subset, bool Is_even_cols>
-__global__ __launch_bounds__(Ktraits::THREADS_PER_CTA) 
+__global__ __launch_bounds__(Ktraits::THREADS_PER_CTA)
 void ln_fwd_kernel(FwdParams params) {
 
     enum { ROWS_PER_CTA = Ktraits::ROWS_PER_CTA };
