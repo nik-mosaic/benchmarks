@@ -17,11 +17,13 @@ import torch.nn.functional as F
 from composer.metrics.nlp import LanguageCrossEntropy, Perplexity
 from composer.models.base import ComposerModel
 from omegaconf import DictConfig
+
+# Optimizations
 from performance.algorithms.fused_dense_gelu_dense.fused_dgd_layer import \
-    DenseResGeluDense
+   DenseResGeluDense
 from src.losses.cross_entropy import CrossEntropyLoss
 from src.ops.layer_norm import dropout_add_layer_norm
-
+# from src.ops.fused_dense import FusedMLP
 # from performance.algorithms.fused_dropout_add_layernorm.dropout_ln_add import DropoutAddLayerNorm
 
 
@@ -219,6 +221,10 @@ class GPTMLP(nn.Module):
         return out
 
 
+########################################
+# Original GPT Block
+# Remove self.transformer.ln_i if using.
+########################################
 class V1GPTBlock(nn.Module):
 
     def __init__(self,
@@ -249,61 +255,16 @@ class V1GPTBlock(nn.Module):
         x = x + self.resid_mlp_dropout(n)
         return x
 
-
 # ====================================
-# New GPT Block, allowing for Dropout
-# + Add + LayerNorm optimizations
+# End Original GPT Block
 # ====================================
-class V2GPTBlock(nn.Module):
 
-    def __init__(self,
-                 cfg: DictConfig,
-                 causal_attn_cls,
-                 device: Optional[str] = None):
-        super().__init__()
-        if cfg.get('alibi', False):
-            assert cfg.attn_impl == 'triton' or cfg.attn_impl == 'torch', 'Only triton kernel or torch supports alibi'
-        self.causal_attn = causal_attn_cls(cfg, device)
-        self.mlp = GPTMLP(cfg, device=device)
-        # DropoutAddLayerNorm layers
-        self.daln_1 = DropoutAddLayerNorm(cfg.d_model,
-                                          cfg.resid_pdrop,
-                                          device=device)
-        self.daln_2 = DropoutAddLayerNorm(cfg.d_model,
-                                          cfg.resid_pdrop,
-                                          device=device)
-
-    def forward(
-        self,
-        x: torch.Tensor,
-        key_padding_mask: Optional[torch.ByteTensor] = None,
-        attn_mask: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
-        a, _ = self.causal_attn(x, key_padding_mask, attn_mask)
-        b = self.daln_1(a, x)
-        # DropoutAddLayerNorm is equivalent to:
-        # y = x + self.resid_attn_dropout(a)
-        # b = self.ln_1(y)
-
-        m = self.mlp(b)
-        n = self.daln_2(m, b)
-        # DropoutAddLayerNorm is equivalent to:
-        # y2 = b + self.resid_mlp_dropout(m)
-        # n = self.ln_2(y2)
-        return n
-
-
-# ====================================
-# End New GPT Block
-# ====================================
 
 # ===========================================
-# SECOND VERSION of New GPT Blocks:
+# New GPT Block:
 # Shift operations but maintain
 # equivalence to original GPT Block structure
 # ===========================================
-
-
 class GPTBlock(nn.Module):
 
     def __init__(self,
@@ -316,9 +277,9 @@ class GPTBlock(nn.Module):
         self.causal_attn = causal_attn_cls(cfg, device)
         self.ln_1 = nn.LayerNorm(cfg.d_model, device=device)
         self.ln_2 = nn.LayerNorm(cfg.d_model, device=device)
-        # self.daln_1 = DropoutAddLayerNorm(cfg.d_model, cfg.resid_pdrop, device=device)
         self.mlp = GPTMLP(cfg, device=device)
-        # self.daln_2 = DropoutAddLayerNorm(cfg.d_model, cfg.resid_pdrop, device=device)
+        # self.mlp = FusedMLP(cfg.d_model, cfg.d_model * cfg.mlp_ratio, out_features = cfg.d_model,
+        #                    heuristic=0, checkpoint_lvl=0, device=device) 
 
     def forward(
         self,
@@ -390,7 +351,7 @@ class MosaicGPT(nn.Module):
             })
         self.transformer.update({'emb_drop': nn.Dropout(cfg.emb_pdrop)})
 
-        # Use ln_i only with V3GPT Block
+        # Use ln_i only with V2GPT Block
         self.transformer.update(
             {'ln_i': nn.LayerNorm(cfg.d_model, device=cfg.device)})
 
@@ -491,18 +452,17 @@ class MosaicGPT(nn.Module):
                                     seq_len=S,
                                     key_padding_mask=key_padding_mask)
 
-        # Only use with V3GPTBlock Initial LayerNorm
+        # Only use with V2GPTBlock Initial LayerNorm
         a = self.transformer.ln_i(x)
 
-        # GPT Blocks
-
+        # Use with original GPT Block
         """
         for block in self.transformer.blocks:  # type: ignore
             x = block(
                 x, None if self.cfg.attn_impl == 'triton' else key_padding_mask,
                 attn_mask)
         """
-        # Only use with V3GPTBlock
+        # Only use with V2GPTBlock
         for block in self.transformer.blocks:  # type: ignore
             a, x = block(
                 a, x,
