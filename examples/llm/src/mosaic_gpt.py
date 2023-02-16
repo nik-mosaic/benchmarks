@@ -461,6 +461,8 @@ class MosaicGPT(nn.Module):
             x = block(
                 x, None if self.cfg.attn_impl == 'triton' else key_padding_mask,
                 attn_mask)
+        
+        x = self.transformer.ln_f(x)  # type: ignore
         """
         # Only use with V2GPTBlock
         for block in self.transformer.blocks:  # type: ignore
@@ -469,11 +471,12 @@ class MosaicGPT(nn.Module):
                 None if self.cfg.attn_impl == 'triton' else key_padding_mask,
                 attn_mask)
 
-        x = self.transformer.ln_f(x)  # type: ignore
         # output embedding weight tied to input embedding
         assert isinstance(self.transformer.wte, nn.Module)  # pyright
         assert isinstance(self.transformer.wte.weight, torch.Tensor)  # pyright
-        logits = F.linear(x, self.transformer.wte.weight, None)
+        
+        # Change to F.linear(x) if using original GPT Block
+        logits = F.linear(a, self.transformer.wte.weight, None)
         return logits
 
     # Param Initialization, needed for device='meta' fast initialization
