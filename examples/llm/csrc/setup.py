@@ -92,16 +92,16 @@ ext_modules.append(
 
 ext_modules.append(
     CUDAExtension(
-        name='fused_dense_lib',
+        name='fused_mlp_lib',
         sources=[
-            'fused_dense_lib/fused_dense.cpp',
-            'fused_dense_lib/fused_dense_cuda.cu'
+            'fused_mlp_lib/fused_dense.cpp',
+            'fused_mlp_lib/fused_dense_cuda.cu'
         ],
         extra_compile_args={
             'cxx': ['-O3',],
             'nvcc': append_nvcc_threads(['-O3'])
         },
-        include_dirs=[os.path.join(this_dir, 'fused_dense_lib')],
+        include_dirs=[os.path.join(this_dir, 'fused_mlp_lib')],
     ))
 
 ext_modules.append(
